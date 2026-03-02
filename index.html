@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>NANO-IRC | ULTIMATE v11.1</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; height: 100vh; display: flex; overflow: hidden; }
+
+        /* AUTH */
+        #auth-overlay { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        #auth-box { border: 1px solid #00ff41; padding: 35px; background: #080808; width: 380px; text-align: center; }
+        .auth-input { width: 100%; padding: 12px; margin: 10px 0; background: #000; border: 1px solid #004411; color: #00ff41; outline: none; }
+        .auth-btn { width: 100%; padding: 12px; background: #004411; color: #00ff41; border: 1px solid #00ff41; cursor: pointer; font-weight: bold; }
+        .auth-hint { font-size: 11px; color: #008822; margin-top: 12px; font-style: italic; }
+
+        /* SIDEBAR */
+        #sidebar { width: 300px; background: #080808; border-right: 1px solid #004411; display: flex; flex-direction: column; padding: 15px; }
+        .side-section { margin-bottom: 25px; }
+        h3 { font-size: 11px; color: #004411; text-transform: uppercase; border-bottom: 1px solid #004411; padding-bottom: 5px; margin-bottom: 10px; letter-spacing: 2px; }
+        .user-item { font-size: 13px; margin-bottom: 4px; color: #e0e0e0; display: flex; align-items: center; }
+        .online-dot { color: #00ff41; font-size: 8px; margin-right: 8px; }
+        
+        /* COMMANDS */
+        .cmd-group { font-size: 11px; line-height: 1.6; margin-bottom: 10px; }
+        .cmd-user { color: #008822; }
+        .cmd-mod { color: #ffaa00; }
+
+        /* TG LINK */
+        #tg-wrapper { margin-top: auto; padding-top: 15px; border-top: 1px dashed #004411; }
+        #tg-link { color: #00ff41; text-decoration: none; font-size: 12px; display: block; text-align: center; border: 1px solid #004411; padding: 8px; }
+        #tg-link:hover { background: #004411; color: #fff; }
+
+        /* MAIN CHAT */
+        #chat-main { flex-grow: 1; display: flex; flex-direction: column; background: #000; }
+        #channel-info { padding: 10px 20px; background: #050505; border-bottom: 1px solid #004411; font-size: 12px; color: #008822; }
+        #messages { flex-grow: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+        .msg-line { font-size: 14px; }
+        .m-time { color: #004411; font-size: 10px; margin-right: 10px; }
+        .m-user { font-weight: bold; margin-right: 8px; }
+        .m-text { color: #ccc; }
+        .m-private { color: #ff00ff !important; font-style: italic; } /* Цвет для ЛС */
+        
+        /* INPUT AREA */
+        #typing-box { height: 20px; padding: 0 25px; font-size: 10px; color: #008822; }
+        #input-area { height: 65px; border-top: 1px solid #004411; display: flex; align-items: center; padding: 0 25px; background: #050505; }
+        #user-input { flex-grow: 1; background: transparent; border: none; color: #00ff41; font-family: inherit; font-size: 16px; outline: none; }
+    </style>
+</head>
+<body>
+
+<div id="auth-overlay">
+    <div id="auth-box">
+        <h1 style="font-size: 20px; margin-bottom: 20px; letter-spacing: 5px;">NANO_IRC</h1>
+        <input type="text" id="auth-nick" class="auth-input" placeholder="LOGIN" maxlength="20">
+        <input type="password" id="auth-pass" class="auth-input" placeholder="PASS_KEY">
+        <button class="auth-btn" onclick="tryLogin()">INIT_SESSION</button>
+        <p class="auth-hint">нет учетной записи? сделаем.</p>
+        <p id="auth-error" style="color:#ff4444; font-size:11px; margin-top:15px;"></p>
+    </div>
+</div>
+
+<div id="sidebar">
+    <div class="side-section">
+        <h3>SESSION</h3>
+        <div id="my-nick" style="color:#fff; font-size:14px;">...</div>
+    </div>
+
+    <div class="side-section" style="flex-grow:1">
+        <h3>ACTIVE_NODES</h3>
+        <div id="user-list"></div>
+    </div>
+
+    <div class="side-section">
+        <h3>USER_COMMANDS</h3>
+        <div class="cmd-group cmd-user">
+            #join [room] - Войти<br>
+            #exitroom - Выйти в #general<br>
+            @nick [msg] - Личное сообщение<br>
+            #roll, #clear, #help
+        </div>
+        <h3>MOD_COMMANDS</h3>
+        <div class="cmd-group cmd-mod">
+            #ban, #unban, #purge, #poweroff
+        </div>
+    </div>
+
+    <div id="tg-wrapper">
+        <a href="https://t.me/+EB8M8N-icHsyYjZi" id="tg-link" target="_blank">ACCESS_TG_CHANNEL</a>
+    </div>
+</div>
+
+<div id="chat-main">
+    <div id="channel-info">CHANNEL: <span id="cur-chan">#general</span></div>
+    <div id="messages"></div>
+    <div id="typing-box"></div>
+    <div id="input-area">
+        <span style="color:#00ff41; margin-right:15px;">#</span>
+        <input type="text" id="user-input" placeholder="Waiting for instruction..." autofocus autocomplete="off">
+    </div>
+</div>
+
+<script>
+    const SUPABASE_URL = 'https://lwqcytxnpmdkrgiiirnp.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx3cWN5dHhucG1ka3JnaWlpcm5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NTE3NjMsImV4cCI6MjA4ODAyNzc2M30.IR6sZosUZdpNN3iHmPW1bVldjpNgvwqWU04he6bjZg4';
+    const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let currentUser = "";
+    let currentRole = "user";
+    let currentChannel = "general";
+
+    async function tryLogin() {
+        const nick = document.getElementById('auth-nick').value.trim();
+        const pass = document.getElementById('auth-pass').value.trim();
+        if(!nick || !pass) return;
+        const hashed = CryptoJS.SHA256(pass).toString();
+        const { data: user } = await _supabase.from('profiles').select('*').eq('username', nick).maybeSingle();
+
+        if (user) {
+            if (user.is_banned) { alert("ACCESS_DENIED"); return; }
+            if (user.password === hashed) { currentRole = user.role || "user"; startChat(nick); }
+            else document.getElementById('auth-error').innerText = "INVALID_KEY";
+        } else {
+            await _supabase.from('profiles').insert([{ username: nick, password: hashed, role: 'user' }]);
+            startChat(nick);
+        }
+    }
+
+    function startChat(nick) {
+        currentUser = nick;
+        document.getElementById('auth-overlay').style.display = 'none';
+        document.getElementById('my-nick').innerText = "@" + nick;
+        
+        _supabase.channel('public-room').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => {
+            const m = p.new;
+            // Условие отображения: либо общий канал, либо ЛС для меня, либо ЛС от меня
+            if (m.recipient) {
+                if (m.recipient === currentUser || m.username === currentUser) render(m);
+            } else if (m.channel === currentChannel && m.username !== currentUser) {
+                render(m);
+            }
+        }).subscribe();
+
+        updateOnline();
+        setInterval(updateOnline, 10000);
+        loadHistory();
+    }
+
+    async function updateOnline() {
+        const { data } = await _supabase.from('profiles').select('username').eq('is_banned', false);
+        const list = document.getElementById('user-list');
+        list.innerHTML = '';
+        data.forEach(u => {
+            list.innerHTML += `<div class="user-item"><span class="online-dot">●</span> ${u.username}</div>`;
+        });
+    }
+
+    async function loadHistory() {
+        document.getElementById('messages').innerHTML = '';
+        // Загружаем общие сообщения канала ИЛИ личные сообщения для нас
+        const { data } = await _supabase.from('messages')
+            .select('*')
+            .or(`and(channel.eq.${currentChannel},recipient.is.null),recipient.eq.${currentUser},and(username.eq.${currentUser},recipient.not.is.null)`)
+            .order('created_at', { ascending: true })
+            .limit(40);
+        if (data) data.forEach(m => render(m));
+    }
+
+    function render(msg) {
+        const box = document.getElementById('messages');
+        const div = document.createElement('div');
+        div.className = 'msg-line';
+        
+        const time = document.createElement('span');
+        time.className = 'm-time';
+        time.textContent = `[${new Date(msg.created_at || Date.now()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}]`;
+
+        const user = document.createElement('span');
+        user.className = 'm-user';
+        user.textContent = msg.recipient ? `[PM to ${msg.recipient}] <${msg.username}>` : `<${msg.username}>`;
+        
+        const text = document.createElement('span');
+        text.className = 'm-text';
+        if (msg.recipient) text.className += ' m-private';
+        text.textContent = msg.content; // IRON SHIELD
+
+        div.append(time, user, text);
+        box.append(div);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    async function handleCommand(val) {
+        const [cmd, ...args] = val.split(' ');
+        
+        if (val.startsWith('@')) {
+            const target = cmd.substring(1);
+            const message = args.join(' ');
+            if (target && message) sendMsg(message, target);
+            return;
+        }
+
+        switch(cmd.toLowerCase()) {
+            case '#join':
+                currentChannel = args[0] || 'general';
+                document.getElementById('cur-chan').innerText = '#' + currentChannel;
+                loadHistory();
+                break;
+            case '#exitroom':
+                currentChannel = 'general';
+                document.getElementById('cur-chan').innerText = '#general';
+                loadHistory();
+                break;
+            case '#help':
+                render({ username: 'SYSTEM', content: 'CMD: #join, #exitroom, @nick, #roll, #clear. MOD: #ban, #unban, #purge, #poweroff' });
+                break;
+            case '#clear': document.getElementById('messages').innerHTML = ''; break;
+            case '#roll': sendMsg(`выбросил кубик: ${Math.floor(Math.random()*100)+1}`); break;
+            
+            // MODERATOR
+            case '#ban':
+                if(currentRole !== 'admin') return;
+                await _supabase.from('profiles').update({ is_banned: true }).eq('username', args[0]);
+                break;
+            case '#purge':
+                if(currentRole !== 'admin') return;
+                await _supabase.from('messages').delete().eq('channel', currentChannel);
+                loadHistory();
+                break;
+            case '#poweroff':
+                if(currentRole !== 'admin') return;
+                await _supabase.from('messages').insert([{ username: 'SYSTEM', content: 'POWER OFF', channel: currentChannel }]);
+                break;
+            default: sendMsg(val);
+        }
+    }
+
+    async function sendMsg(txt, recipient = null) {
+        render({ username: currentUser, content: txt, recipient: recipient, created_at: new Date() });
+        await _supabase.from('messages').insert([{ 
+            username: currentUser, 
+            content: txt, 
+            channel: currentChannel,
+            recipient: recipient 
+        }]);
+    }
+
+    const input = document.getElementById('user-input');
+    input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const val = input.value.trim();
+            if (!val) return;
+            input.value = '';
+            handleCommand(val);
+        }
+    });
+</script>
+
+</body>
+</html>
