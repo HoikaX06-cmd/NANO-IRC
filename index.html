@@ -237,7 +237,7 @@
         }
     }
 
-    // --- СИСТЕМНЫЕ ФУНКЦИИ ---
+   
     async function systemMsg(txt, isError = false) {
         const token = localStorage.getItem('nano_session');
         if (!isError) await _supabase.from('messages').insert([{ username: 'SYSTEM', content: txt, channel: room, device_log: token }]);
@@ -294,7 +294,32 @@
         const now = Date.now();
         Object.keys(onlineUsers).forEach(u => {
             const div = document.createElement('div');
-            const isTyping
+            const isTyping = typingStatus[u] && (now - typingStatus[u] < 3000);
+            div.innerHTML = `● ${u}${isTyping ? '<span class="typing-tag"> typing...</span>' : ''}`;
+            list.appendChild(div);
+        });
+    }
+
+    
+    document.addEventListener('keypress', e => {
+        if(e.target.id === 'ui') {
+            if(e.key === 'Enter') {
+                const v = e.target.value.trim();
+                if(!v) return;
+                e.target.value = "";
+                window.handleCmd(v); 
+            } else {
+                _supabase.channel('room_data').send({ 
+                    type: 'broadcast', 
+                    event: 'typing', 
+                    payload: { u: user } 
+                });
+            }
+        }
+    });
+
+})(); 
+</script>
 </script>
 </body>
 </html>
