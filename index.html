@@ -110,19 +110,25 @@
 </div>
 
 <script>
+(function() {
     const SUPABASE_URL = 'https://lwqcytxnpmdkrgiiirnp.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx3cWN5dHhucG1ka3JnaWlpcm5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NTE3NjMsImV4cCI6MjA4ODAyNzc2M30.IR6sZosUZdpNN3iHmPW1bVldjpNgvwqWU04he6bjZg4';
     const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     let user = "";
     let room = "general";
+    let sessionToken = ""; // Наш секретный паспорт
     let onlineUsers = {};
     let typingStatus = {};
     let startTime = Date.now();
 
-    setInterval(() => { document.getElementById('uptime').innerText = Math.floor((Date.now() - startTime)/1000) + "s"; }, 1000);
+    setInterval(() => { 
+        const uptime = document.getElementById('uptime');
+        if(uptime) uptime.innerText = Math.floor((Date.now() - startTime)/1000) + "s"; 
+    }, 1000);
 
-    async function login() {
+    // --- АВТОРИЗАЦИЯ С ТОКЕНОМ ---
+    window.login = async function() {
         const n = document.getElementById('a-nick').value.trim();
         const p = document.getElementById('a-pass').value.trim();
         if(!n || !p) return;
@@ -131,11 +137,24 @@
         const h = CryptoJS.SHA256(p).toString();
         const { data } = await _supabase.from('profiles').select('*').eq('username', n).maybeSingle();
         
+        // Генерируем уникальный токен сессии
+        const newToken = CryptoJS.SHA256(n + Date.now() + "NANO_SALT_99").toString();
+
         setTimeout(async () => {
-            if(data && data.password === h) { user = n; start(); }
+            if(data && data.password === h) { 
+                user = n; 
+                sessionToken = newToken;
+                localStorage.setItem('nano_session', newToken);
+                // Обновляем токен в базе для проверки триггером
+                await _supabase.from('profiles').update({ session_id: newToken }).eq('username', n);
+                start(); 
+            }
             else if(!data) {
-                await _supabase.from('profiles').insert([{ username: n, password: h }]);
-                user = n; start();
+                user = n; 
+                sessionToken = newToken;
+                localStorage.setItem('nano_session', newToken);
+                await _supabase.from('profiles').insert([{ username: n, password: h, session_id: newToken }]);
+                start();
             } else {
                 alert("ACCESS DENIED");
                 document.getElementById('auth-box').classList.remove('glitching');
@@ -150,26 +169,78 @@
         channel
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => {
                 const m = p.new;
+                // Показываем если: (не я) И ((публичное в этой комнате) ИЛИ (приватка мне))
                 if (m.username !== user && ((!m.recipient && m.channel === room) || m.recipient === user)) render(m);
             })
             .on('presence', { event: 'sync' }, () => { onlineUsers = channel.presenceState(); updateUserList(); })
             .on('broadcast', { event: 'typing' }, p => { typingStatus[p.payload.u] = Date.now(); updateUserList(); })
-            .subscribe(async (status) => { if (status === 'SUBSCRIBED') await channel.track({ online_at: new Date().toISOString() }); });
+            .subscribe(async (status) => { 
+                if (status === 'SUBSCRIBED') await channel.track({ online_at: new Date().toISOString() }); 
+            });
 
         addLocalLog("Node authorized as " + user);
         loadHistory();
     }
 
-    function addLocalLog(txt) {
-        const log = document.getElementById('local-log');
-        const d = document.createElement('div');
-        d.textContent = "> " + txt;
-        log.prepend(d);
-        if(log.children.length > 5) log.lastChild.remove();
+    // --- ОБРАБОТКА КОМАНД И ОТПРАВКА ---
+    window.handleCmd = async function(v) {
+        const parts = v.split(' ');
+        const cmd = parts[0].toLowerCase();
+        const token = localStorage.getItem('nano_session');
+
+        // Вспомогательная функция для вставки (чтобы не дублировать device_log)
+        const post = async (obj) => {
+            const { error } = await _supabase.from('messages').insert([{ ...obj, device_log: token }]);
+            if(error) {
+                console.error("BLOCK:", error.message);
+                addLocalLog("ERR: Access Denied by DB");
+            }
+        };
+
+        if(cmd === '#create') {
+            const rName = parts[1];
+            if(!rName) return;
+            const { data: ex } = await _supabase.from('rooms').select('name').eq('name', rName).maybeSingle();
+            if(ex) render({ username: 'SYSTEM', content: "error 21 -- уже существует", isError: true });
+            else {
+                await _supabase.from('rooms').insert([{ name: rName, creator: user }]);
+                systemMsg(`Комната #${rName} создана.`);
+            }
+        } 
+        else if(cmd === '#join') {
+            const rName = parts[1];
+            const { data } = await _supabase.from('rooms').select('*').eq('name', rName).maybeSingle();
+            if(!data) render({ username: 'SYSTEM', content: "error 19 -- не существует", isError: true });
+            else {
+                room = rName;
+                document.getElementById('current-room').textContent = "#" + room;
+                loadHistory();
+                systemMsg(`${user} влетел в #${room}`);
+            }
+        }
+        else if(cmd === '#me') {
+            const act = parts.slice(1).join(' ');
+            if(!act) return;
+            const final = "/me " + act;
+            render({ username: user, content: final, created_at: new Date() });
+            await post({ username: user, content: final, channel: room });
+        }
+        else if(v.startsWith('@')) {
+            const rec = parts[0].substring(1);
+            const msg = parts.slice(1).join(' ');
+            render({ username: user, content: `[TO ${rec}] ${msg}`, recipient: rec, created_at: new Date() });
+            await post({ username: user, content: msg, recipient: rec, channel: room });
+        }
+        else {
+            render({ username: user, content: v, created_at: new Date() });
+            await post({ username: user, content: v, channel: room });
+        }
     }
 
+    // --- СИСТЕМНЫЕ ФУНКЦИИ ---
     async function systemMsg(txt, isError = false) {
-        if (!isError) await _supabase.from('messages').insert([{ username: 'SYSTEM', content: txt, channel: room }]);
+        const token = localStorage.getItem('nano_session');
+        if (!isError) await _supabase.from('messages').insert([{ username: 'SYSTEM', content: txt, channel: room, device_log: token }]);
         render({ username: 'SYSTEM', content: txt, created_at: new Date(), isSystem: !isError, isError: isError });
     }
 
@@ -196,91 +267,34 @@
         box.scrollTop = box.scrollHeight;
     }
 
-    async function handleCmd(v) {
-        const parts = v.split(' ');
-        const cmd = parts[0].toLowerCase();
-
-        if(cmd === '#create') {
-            const rName = parts[1];
-            if(!rName) return;
-            addLocalLog(`Creating room: ${rName}`);
-            const { data: ex } = await _supabase.from('rooms').select('name').eq('name', rName).maybeSingle();
-            if(ex) render({ username: 'SYSTEM', content: "error 21 -- комната уже существует", isError: true, created_at: new Date() });
-            else {
-                await _supabase.from('rooms').insert([{ name: rName, creator: user }]);
-                systemMsg(`Комната #${rName} создана.`);
-                addLocalLog(`Success: #${rName} up.`);
-            }
-        } 
-        else if(cmd === '#join') {
-            const rName = parts[1];
-            const { data } = await _supabase.from('rooms').select('*').eq('name', rName).maybeSingle();
-            if(!data) render({ username: 'SYSTEM', content: "error 19 -- комнаты не существует", isError: true, created_at: new Date() });
-            else {
-                room = rName;
-                document.getElementById('current-room').textContent = "#" + room;
-                loadHistory();
-                addLocalLog(`Jumped to #${room}`);
-                systemMsg(`${user} влетел в #${room}`);
-            }
-        }
-        else if(cmd === '#exit_room') {
-            if(room === 'general') render({ username: 'SYSTEM', content: "error 10 -- вы уже в #general", isError: true, created_at: new Date() });
-            else {
-                room = 'general';
-                document.getElementById('current-room').textContent = "#general";
-                loadHistory();
-                addLocalLog(`Returned to base.`);
-                systemMsg(`${user} вернулся в #general`);
-            }
-        }
-        else if(cmd === '#me') {
-            const act = parts.slice(1).join(' ');
-            if(!act) return;
-            const final = "/me " + act;
-            render({ username: user, content: final, created_at: new Date() });
-            await _supabase.from('messages').insert([{ username: user, content: final, channel: room }]);
-        }
-        else if(v.startsWith('@')) {
-            const rec = parts[0].substring(1);
-            const msg = parts.slice(1).join(' ');
-            render({ username: user, content: `[TO ${rec}] ${msg}`, recipient: rec, created_at: new Date() });
-            await _supabase.from('messages').insert([{ username: user, content: msg, recipient: rec, channel: room }]);
-        }
-        else {
-            render({ username: user, content: v, created_at: new Date() });
-            await _supabase.from('messages').insert([{ username: user, content: v, channel: room }]);
-        }
-    }
-
     async function loadHistory() {
-        const { data } = await _supabase.from('messages').select('*').eq('channel', room).is('recipient', null).order('created_at', { ascending: true }).limit(50);
+        const { data } = await _supabase.from('messages')
+            .select('*')
+            .eq('channel', room)
+            .is('recipient', null)
+            .order('created_at', { ascending: true })
+            .limit(50);
         document.getElementById('messages').innerHTML = "";
         if(data) data.forEach(m => render(m));
     }
 
+    function addLocalLog(txt) {
+        const log = document.getElementById('local-log');
+        if(!log) return;
+        const d = document.createElement('div');
+        d.textContent = "> " + txt;
+        log.prepend(d);
+        if(log.children.length > 5) log.lastChild.remove();
+    }
+
     function updateUserList() {
         const list = document.getElementById('user-list');
+        if(!list) return;
         list.innerHTML = "";
         const now = Date.now();
         Object.keys(onlineUsers).forEach(u => {
             const div = document.createElement('div');
-            const isTyping = typingStatus[u] && (now - typingStatus[u] < 3000);
-            div.innerHTML = `● ${u}${isTyping ? '<span class="typing-tag">typing...</span>' : ''}`;
-            list.appendChild(div);
-        });
-    }
-
-    document.getElementById('ui').addEventListener('keypress', e => {
-        if(e.key === 'Enter') {
-            const v = e.target.value.trim();
-            if(!v) return;
-            e.target.value = "";
-            handleCmd(v);
-        } else {
-            _supabase.channel('room_data').send({ type: 'broadcast', event: 'typing', payload: { u: user } });
-        }
-    });
+            const isTyping
 </script>
 </body>
 </html>
