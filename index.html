@@ -127,28 +127,72 @@
         if(uptime) uptime.innerText = Math.floor((Date.now() - startTime)/1000) + "s"; 
     }, 1000);
 
-    // --- АВТОРИЗАЦИЯ С ТОКЕНОМ ---
+   // --- ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ АВТОРИЗАЦИЯ ---
     window.login = async function() {
         const n = document.getElementById('a-nick').value.trim();
         const p = document.getElementById('a-pass').value.trim();
         if(!n || !p) return;
 
-        document.getElementById('auth-box').classList.add('glitching');
+        const authBox = document.getElementById('auth-box');
+        if(authBox) authBox.classList.add('glitching');
+
         const h = CryptoJS.SHA256(p).toString();
-        const { data } = await _supabase.from('profiles').select('*').eq('username', n).maybeSingle();
         
-        // Генерируем уникальный токен сессии
+        // 1. Проверяем, есть ли такой юзер
+        const { data, error: fetchError } = await _supabase
+            .from('profiles')
+            .select('*')
+            .eq('username', n)
+            .maybeSingle();
+
         const newToken = CryptoJS.SHA256(n + Date.now() + "NANO_SALT_99").toString();
 
-        setTimeout(async () => {
-            if(data && data.password === h) { 
-                user = n; 
+        // 2. Логика входа
+        if (data) {
+            // Если пароль совпал
+            if (data.password === h) {
+                // ОБНОВЛЯЕМ СЕССИЮ В БАЗЕ
+                const { error: updErr } = await _supabase
+                    .from('profiles')
+                    .update({ session_id: newToken })
+                    .eq('username', n);
+
+                if(updErr) {
+                    alert("Ошибка БД при входе");
+                    return;
+                }
+                
+                user = n;
                 sessionToken = newToken;
                 localStorage.setItem('nano_session', newToken);
-                // Обновляем токен в базе для проверки триггером
-                await _supabase.from('profiles').update({ session_id: newToken }).eq('username', n);
-                start(); 
+                start();
+            } else {
+                alert("ACCESS DENIED: Неверный пароль");
+                if(authBox) authBox.classList.remove('glitching');
             }
+        } 
+        // 3. Логика регистрации (если юзера нет)
+        else {
+            const { error: insErr } = await _supabase
+                .from('profiles')
+                .insert([{ 
+                    username: n, 
+                    password: h, 
+                    session_id: newToken 
+                }]);
+
+            if(insErr) {
+                alert("Ошибка регистрации");
+                return;
+            }
+
+            user = n;
+            sessionToken = newToken;
+            localStorage.setItem('nano_session', newToken);
+            start();
+        }
+    };
+            
             else if(!data) {
                 user = n; 
                 sessionToken = newToken;
