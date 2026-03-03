@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>NANO_IRC v12.2</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        :root { --neon: #00ff41; --dim: #00cc33; --bg: #050505; --orange: #ffaa00; --red: #ff3333; --side: #222; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--neon); font-family: 'Courier New', monospace; height: 100vh; display: flex; overflow: hidden; }
+
+        /* AUTH */
+        #auth-overlay { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .auth-box { border: 1px solid var(--neon); padding: 50px; background: #080808; text-align: center; }
+        .auth-box h1 { font-size: 56px; letter-spacing: 12px; margin-bottom: 25px; }
+        .auth-in { background: #000; border: 1px solid var(--dim); color: var(--neon); padding: 12px; width: 100%; margin: 10px 0; outline: none; text-align: center; font-size: 18px; }
+        .auth-btn { width: 100%; padding: 15px; background: var(--dim); color: #000; border: 1px solid var(--neon); cursor: pointer; font-weight: bold; }
+
+        /* SIDEBAR (Светлее) */
+        #sidebar { width: 300px; background: var(--side); border-right: 1px solid var(--dim); display: flex; flex-direction: column; padding: 20px; }
+        .section-h { font-size: 11px; color: var(--neon); text-transform: uppercase; border-bottom: 1px solid var(--dim); margin: 15px 0 10px; padding-bottom: 4px; font-weight: bold; }
+        #user-list { font-size: 14px; color: #fff; min-height: 50px; }
+        .typing-tag { color: var(--orange); font-size: 10px; margin-left: 5px; animation: blink 0.8s infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .sys-stats { font-size: 11px; color: #aaa; line-height: 1.6; margin-bottom: 10px; }
+        .cmd-info { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .local-log { font-size: 10px; color: #555; margin-top: 10px; font-style: italic; }
+        .tg-link { border: 1px solid var(--dim); padding: 10px; text-align: center; color: var(--neon); text-decoration: none; font-size: 12px; margin-top: auto; }
+
+        /* MAIN */
+        #chat-main { flex-grow: 1; display: flex; flex-direction: column; background: #000; }
+        #messages { flex-grow: 1; padding: 20px; overflow-y: auto; }
+        .msg { margin-bottom: 5px; font-size: 15px; }
+        .sys-msg { color: var(--orange); }
+        .err-msg { color: var(--red); font-weight: bold; }
+        .private { color: #ff00ff; border-left: 2px solid #ff00ff; padding-left: 10px; }
+
+        #input-area { height: 60px; border-top: 1px solid var(--dim); display: flex; align-items: center; padding: 0 20px; background: #080808; }
+        #ui { flex-grow: 1; background: transparent; border: none; color: var(--neon); font-family: inherit; font-size: 18px; outline: none; }
+    </style>
+</head>
+<body>
+
+<div id="auth-overlay">
+    <div class="auth-box">
+        <h1>NANO_IRC</h1>
+        <input type="text" id="a-nick" class="auth-in" placeholder="USERNAME">
+        <input type="password" id="a-pass" class="auth-in" placeholder="PASSWORD">
+        <button class="auth-btn" onclick="login()">L0GIN</button>
+    </div>
+</div>
+
+<div id="sidebar">
+    <div class="section-h">System Stats</div>
+    <div class="sys-stats">
+        UPLINK: ACTIVE [AES-256]<br>
+        NODES_SYNC: SUCCESS<br>
+        SESSION_TIME: <span id="uptime">0s</span>
+    </div>
+
+    <div class="section-h">Online Nodes</div>
+    <div id="user-list"></div>
+
+    <div class="section-h">Available Commands</div>
+    <div class="cmd-info">#create [name] | #join [name]</div>
+    <div class="cmd-info">#exit_room | @[nick] [msg]</div>
+    <div class="cmd-info" style="color:var(--orange)">#kick [nick] (Admin)</div>
+
+    <div class="section-h">Local Terminal Log</div>
+    <div id="local-log" class="local-log">
+        > Инициализация ядра...<br>
+        > Поиск активных узлов...<br>
+        > Шифрование канала...
+    </div>
+
+    <a href="https://t.me/+EB8M8N-icHsyYjZi" target="_blank" class="tg-link">TELEGRAM_CHANNEL</a>
+</div>
+
+<div id="chat-main">
+    <div id="messages"></div>
+    <div id="input-area">
+        <span style="color: var(--dim); margin-right: 10px; font-weight: bold;">#root></span>
+        <input type="text" id="ui" placeholder="message or command" autofocus autocomplete="off">
+    </div>
+</div>
+
+<script>
+    const SUPABASE_URL = 'https://lwqcytxnpmdkrgiiirnp.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx3cWN5dHhucG1ka3JnaWlpcm5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NTE3NjMsImV4cCI6MjA4ODAyNzc2M30.IR6sZosUZdpNN3iHmPW1bVldjpNgvwqWU04he6bjZg4';
+    const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let user = "";
+    let room = "general";
+    let roomCreator = "system";
+    let onlineUsers = {};
+    let typingStatus = {};
+    let startTime = Date.now();
+
+    // Счетчик аптайма
+    setInterval(() => {
+        document.getElementById('uptime').innerText = Math.floor((Date.now() - startTime)/1000) + "s";
+    }, 1000);
+
+    async function login() {
+        const n = document.getElementById('a-nick').value.trim();
+        const p = document.getElementById('a-pass').value.trim();
+        if(!n || !p) return;
+        const h = CryptoJS.SHA256(p).toString();
+        
+        const { data } = await _supabase.from('profiles').select('*').eq('username', n).maybeSingle();
+        if(data) {
+            if(data.password === h) { user = n; start(); }
+            else alert("ACCESS DENIED");
+        } else {
+            await _supabase.from('profiles').insert([{ username: n, password: h }]);
+            user = n; start();
+        }
+    }
+
+    function start() {
+        document.getElementById('auth-overlay').style.display = 'none';
+        
+        const channel = _supabase.channel('room_data', { config: { presence: { key: user } } });
+
+        channel
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => {
+                const m = p.new;
+                if (m.username !== user) {
+                    if ((!m.recipient && m.channel === room) || m.recipient === user) render(m);
+                }
+            })
+            .on('presence', { event: 'sync' }, () => {
+                onlineUsers = channel.presenceState();
+                updateUserList();
+            })
+            .on('broadcast', { event: 'typing' }, p => {
+                typingStatus[p.payload.u] = Date.now();
+                updateUserList();
+            })
+            .subscribe(async (status) => {
+                if (status === 'SUBSCRIBED') {
+                    await channel.track({ online_at: new Date().toISOString() });
+                }
+            });
+
+        const intros = ["влетел в чат", "ворвался в систему", "на базе", "подключился"];
+        systemMsg(`${user} ${intros[Math.floor(Math.random()*intros.length)]}`);
+        
+        loadHistory();
+        setInterval(updateUserList, 2000);
+    }
+
+    function addLocalLog(txt) {
+        const log = document.getElementById('local-log');
+        const d = document.createElement('div');
+        d.textContent = "> " + txt;
+        log.prepend(d);
+        if(log.children.length > 5) log.lastChild.remove();
+    }
+
+    async function systemMsg(txt, isError = false) {
+        if (!isError) await _supabase.from('messages').insert([{ username: 'SYSTEM', content: txt, channel: room }]);
+        render({ username: 'SYSTEM', content: txt, created_at: new Date(), isSystem: !isError, isError: isError });
+    }
+
+    function render(m) {
+        const box = document.getElementById('messages');
+        const d = document.createElement('div');
+        d.className = 'msg' + (m.recipient ? ' private' : '') + (m.isSystem ? ' sys-msg' : '') + (m.isError ? ' err-msg' : '');
+        const time = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        const content = m.username === 'SYSTEM' ? m.content : `<${m.username}> ${m.content}`;
+        d.textContent = `[${time}] ${content}`;
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    async function loadHistory() {
+        const { data } = await _supabase.from('messages').select('*').eq('channel', room).is('recipient', null).order('created_at', { ascending: true }).limit(30);
+        document.getElementById('messages').innerHTML = "";
+        if(data) data.forEach(m => render(m));
+    }
+
+    async function handleCmd(v) {
+        const parts = v.split(' ');
+        const cmd = parts[0].toLowerCase();
+
+        if(cmd === '#create') {
+            const name = parts[1];
+            if(!name) return;
+            const { data } = await _supabase.from('rooms').select('name').eq('name', name).maybeSingle();
+            if(data) systemMsg("error 21 -- комната уже существует", true);
+            else {
+                await _supabase.from('rooms').insert([{ name: name, creator: user }]);
+                systemMsg(`Комната #${name} создана. Используй #join ${name}`);
+                addLocalLog(`Создана комната #${name}`);
+            }
+        } 
+        else if(cmd === '#join') {
+            const name = parts[1];
+            const { data } = await _supabase.from('rooms').select('*').eq('name', name).maybeSingle();
+            if(!data) systemMsg("error 19 -- комнаты не существует", true);
+            else {
+                room = name; roomCreator = data.creator;
+                loadHistory();
+                addLocalLog(`Переход в #${name}`);
+                systemMsg(`${user} ворвался в #${name}`);
+            }
+        }
+        else if(cmd === '#exit_room') {
+            if(room === 'general') systemMsg("error 10 -- вы уже в #general", true);
+            else {
+                room = 'general'; roomCreator = 'system';
+                loadHistory();
+                addLocalLog(`Возврат в #general`);
+                systemMsg(`${user} вернулся в #general`);
+            }
+        }
+        else if(cmd === '#kick') {
+            if(user === 'MrRobot' || user === roomCreator) {
+                systemMsg(`Пользователь ${parts[1]} кикнут.`);
+                addLocalLog(`KICK: ${parts[1]}`);
+            } else { systemMsg("error 403 -- отказ в доступе", true); }
+        }
+        else if(v.startsWith('@')) {
+            const rec = parts[0].substring(1);
+            const msg = parts.slice(1).join(' ');
+            render({ username: user, content: `[TO ${rec}] ${msg}`, recipient: rec, created_at: new Date() });
+            await _supabase.from('messages').insert([{ username: user, content: msg, recipient: rec, channel: room }]);
+        }
+        else {
+            render({ username: user, content: v, created_at: new Date() });
+            await _supabase.from('messages').insert([{ username: user, content: v, channel: room }]);
+        }
+    }
+
+    document.getElementById('ui').addEventListener('keypress', e => {
+        if(e.key === 'Enter') {
+            const v = e.target.value.trim();
+            if(!v) return;
+            e.target.value = "";
+            handleCmd(v);
+        } else {
+            _supabase.channel('room_data').send({ type: 'broadcast', event: 'typing', payload: { u: user } });
+        }
+    });
+
+    function updateUserList() {
+        const list = document.getElementById('user-list');
+        list.innerHTML = "";
+        const now = Date.now();
+        
+        Object.keys(onlineUsers).forEach(u => {
+            const div = document.createElement('div');
+            const isTyping = typingStatus[u] && (now - typingStatus[u] < 3000);
+            div.innerHTML = `● ${u}${isTyping ? '<span class="typing-tag">typing...</span>' : ''}`;
+            list.appendChild(div);
+        });
+    }
+</script>
+</body>
+</html>
