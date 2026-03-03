@@ -192,20 +192,7 @@
             start();
         }
     };
-            
-            else if(!data) {
-                user = n; 
-                sessionToken = newToken;
-                localStorage.setItem('nano_session', newToken);
-                await _supabase.from('profiles').insert([{ username: n, password: h, session_id: newToken }]);
-                start();
-            } else {
-                alert("ACCESS DENIED");
-                document.getElementById('auth-box').classList.remove('glitching');
-            }
-        }, 800);
-    }
-
+           
     function start() {
         document.getElementById('auth-overlay').style.display = 'none';
         const channel = _supabase.channel('room_data', { config: { presence: { key: user } } });
