@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>NANO_IRC v12.3 | GLITCH</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        :root { --neon: #00ff41; --dim: #00cc33; --bg: #050505; --orange: #ffaa00; --red: #ff3333; --side: #1a1a1a; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--neon); font-family: 'Courier New', monospace; height: 100vh; display: flex; overflow: hidden; }
+
+        /* GLITCH ANIMATION */
+        @keyframes glitch {
+            0% { transform: translate(0); }
+            20% { transform: translate(-5px, 5px); }
+            40% { transform: translate(-5px, -5px); }
+            60% { transform: translate(5px, 5px); }
+            80% { transform: translate(5px, -5px); }
+            100% { transform: translate(0); }
+        }
+        .glitching { animation: glitch 0.2s infinite; filter: hue-rotate(90deg); }
+
+        /* AUTH */
+        #auth-overlay { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .auth-box { border: 1px solid var(--neon); padding: 50px; background: #080808; text-align: center; }
+        
+        /* SIDEBAR */
+        #sidebar { width: 300px; background: var(--side); border-right: 1px solid var(--dim); display: flex; flex-direction: column; padding: 20px; }
+        .section-h { font-size: 11px; color: var(--neon); text-transform: uppercase; border-bottom: 1px solid var(--dim); margin: 15px 0 10px; padding-bottom: 4px; font-weight: bold; }
+        #user-list { font-size: 14px; color: #fff; margin-bottom: 20px; }
+        .typing-tag { color: var(--orange); font-size: 10px; margin-left: 5px; }
+        
+        .ascii-art { font-size: 8px; line-height: 8px; color: var(--dim); white-space: pre; margin-top: auto; opacity: 0.6; }
+
+        /* MAIN CHAT */
+        #chat-main { flex-grow: 1; display: flex; flex-direction: column; background: #000; }
+        #chat-header { height: 40px; background: #0a0a0a; border-bottom: 1px solid var(--dim); display: flex; align-items: center; padding: 0 20px; font-weight: bold; letter-spacing: 2px; }
+        #messages { flex-grow: 1; padding: 20px; overflow-y: auto; }
+        
+        /* MSG STYLES */
+        .msg { margin-bottom: 5px; font-size: 15px; }
+        .m-action { color: #00bfff; font-style: italic; } /* Стиль для #me */
+        .sys-msg { color: var(--orange); }
+        .err-msg { color: var(--red); font-weight: bold; }
+        .private { color: #ff00ff; border-left: 2px solid #ff00ff; padding-left: 10px; }
+
+        #input-area { height: 60px; border-top: 1px solid var(--dim); display: flex; align-items: center; padding: 0 20px; }
+        #ui { flex-grow: 1; background: transparent; border: none; color: var(--neon); font-family: inherit; font-size: 18px; outline: none; }
+    </style>
+</head>
+<body id="body-root">
+
+<div id="auth-overlay">
+    <div class="auth-box" id="auth-box">
+        <h1 style="font-size: 50px; margin-bottom: 20px;">NANO_IRC</h1>
+        <input type="text" id="a-nick" style="background:#000; border:1px solid var(--dim); color:var(--neon); padding:10px; width:100%; text-align:center;" placeholder="USER">
+        <input type="password" id="a-pass" style="background:#000; border:1px solid var(--dim); color:var(--neon); padding:10px; width:100%; text-align:center; margin-top:10px;" placeholder="PASS">
+        <button onclick="login()" style="width:100%; padding:15px; background:var(--dim); color:#000; border:none; margin-top:20px; cursor:pointer; font-weight:bold;">L0GIN</button>
+    </div>
+</div>
+
+<div id="sidebar">
+    <div class="section-h">System Stats</div>
+    <div style="font-size: 11px; color:#888; margin-bottom:15px;">
+        UPLINK: STABLE<br>
+        ENC: AES-256-GCM<br>
+        UPTIME: <span id="uptime">0s</span>
+    </div>
+
+    <div class="section-h">Online Nodes</div>
+    <div id="user-list"></div>
+
+    <div class="section-h">Local Log</div>
+    <div id="local-log" style="font-size:10px; color:#555; height:60px; overflow:hidden;"></div>
+
+    <div class="ascii-art">
+ _  _   __   __ _  __  
+( \( ) / _\ (  ( )/  \ 
+ )  ( /    \ )  ((  O )
+(_)\_)\_/\_/(_)\_)\__/ 
+    NETWORK_TERMINAL
+    </div>
+    
+    <a href="https://t.me/+EB8M8N-icHsyYjZi" target="_blank" style="color:var(--neon); text-decoration:none; font-size:11px; margin-top:20px; text-align:center; border:1px solid var(--dim); padding:5px;">TG_CHANNEL</a>
+</div>
+
+<div id="chat-main">
+    <div id="chat-header">
+        CHANNEL: <span id="current-room" style="color:#fff; margin-left:10px;">#general</span>
+    </div>
+    <div id="messages"></div>
+    <div id="input-area">
+        <span style="color: var(--dim); margin-right: 10px;">#root></span>
+        <input type="text" id="ui" placeholder="message or command" autofocus autocomplete="off">
+    </div>
+</div>
+
+<script>
+    const SUPABASE_URL = 'https://lwqcytxnpmdkrgiiirnp.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx3cWN5dHhucG1ka3JnaWlpcm5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NTE3NjMsImV4cCI6MjA4ODAyNzc2M30.IR6sZosUZdpNN3iHmPW1bVldjpNgvwqWU04he6bjZg4';
+    const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let user = "";
+    let room = "general";
+    let onlineUsers = {};
+    let typingStatus = {};
+    let startTime = Date.now();
+
+    setInterval(() => { document.getElementById('uptime').innerText = Math.floor((Date.now() - startTime)/1000) + "s"; }, 1000);
+
+    async function login() {
+        const n = document.getElementById('a-nick').value.trim();
+        const p = document.getElementById('a-pass').value.trim();
+        if(!n || !p) return;
+
+        // Эффект Глитча
+        document.getElementById('auth-box').classList.add('glitching');
+        
+        const h = CryptoJS.SHA256(p).toString();
+        const { data } = await _supabase.from('profiles').select('*').eq('username', n).maybeSingle();
+        
+        setTimeout(() => {
+            if(data && data.password === h) { user = n; start(); }
+            else if(!data) {
+                _supabase.from('profiles').insert([{ username: n, password: h }]).then(() => { user = n; start(); });
+            } else {
+                alert("ACCESS DENIED");
+                document.getElementById('auth-box').classList.remove('glitching');
+            }
+        }, 800);
+    }
+
+    function start() {
+        document.getElementById('auth-overlay').style.display = 'none';
+        const channel = _supabase.channel('room_data', { config: { presence: { key: user } } });
+
+        channel
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => {
+                const m = p.new;
+                if (m.username !== user && ((!m.recipient && m.channel === room) || m.recipient === user)) render(m);
+            })
+            .on('presence', { event: 'sync' }, () => { onlineUsers = channel.presenceState(); updateUserList(); })
+            .on('broadcast', { event: 'typing' }, p => { typingStatus[p.payload.u] = Date.now(); updateUserList(); })
+            .subscribe(async (status) => { if (status === 'SUBSCRIBED') await channel.track({ online_at: new Date().toISOString() }); });
+
+        systemMsg(`${user} ворвался в систему`);
+        loadHistory();
+    }
+
+    function render(m) {
+        const box = document.getElementById('messages');
+        const d = document.createElement('div');
+        
+        // Логика #me (action)
+        const isAction = m.content.startsWith('/me ');
+        const cleanContent = isAction ? m.content.substring(4) : m.content;
+
+        d.className = 'msg' + 
+            (m.recipient ? ' private' : '') + 
+            (m.isSystem ? ' sys-msg' : '') + 
+            (m.isError ? ' err-msg' : '') +
+            (isAction ? ' m-action' : '');
+
+        const time = new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        
+        if (isAction) {
+            d.textContent = `[${time}] * ${m.username} ${cleanContent}`;
+        } else {
+            const content = m.username === 'SYSTEM' ? m.content : `<${m.username}> ${m.content}`;
+            d.textContent = `[${time}] ${content}`;
+        }
+
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    async function handleCmd(v) {
+        if(v.startsWith('#me ')) {
+            // Отправляем как обычное сообщение, но с префиксом /me для рендера
+            const actionMsg = "/me " + v.substring(4);
+            render({ username: user, content: actionMsg, created_at: new Date() });
+            await _supabase.from('messages').insert([{ username: user, content: actionMsg, channel: room }]);
+        } 
+        else if(v.startsWith('#join ')) {
+            const name = v.split(' ')[1];
+            const { data } = await _supabase.from('rooms').select('*').eq('name', name).maybeSingle();
+            if(!data) render({ username: 'SYSTEM', content: "error 19 -- комнаты не существует", isError: true });
+            else {
+                room = name;
+                document.getElementById('current-room').textContent = "#" + room;
+                loadHistory();
+                systemMsg(`${user} перешел в #${room}`);
+            }
+        }
+        else if(v === '#exit_room') {
+            if(room === 'general') render({ username: 'SYSTEM', content: "error 10 -- вы уже в #general", isError: true });
+            else {
+                room = 'general';
+                document.getElementById('current-room').textContent = "#general";
+                loadHistory();
+                systemMsg(`${user} вернулся в #general`);
+            }
+        }
+        else if(v.startsWith('@')) {
+            const parts = v.split(' ');
+            const rec = parts[0].substring(1);
+            const msg = parts.slice(1).join(' ');
+            render({ username: user, content: `[TO ${rec}] ${msg}`, recipient: rec, created_at: new Date() });
+            await _supabase.from('messages').insert([{ username: user, content: msg, recipient: rec, channel: room }]);
+        }
+        else {
+            render({ username: user, content: v, created_at: new Date() });
+            await _supabase.from('messages').insert([{ username: user, content: v, channel: room }]);
+        }
+    }
+
+    // Остальные функции (loadHistory, systemMsg, updateUserList) оставить из v12.2
+    async function systemMsg(txt, isError = false) {
+        if (!isError) await _supabase.from('messages').insert([{ username: 'SYSTEM', content: txt, channel: room }]);
+        render({ username: 'SYSTEM', content: txt, created_at: new Date(), isSystem: !isError, isError: isError });
+    }
+
+    async function loadHistory() {
+        const { data } = await _supabase.from('messages').select('*').eq('channel', room).is('recipient', null).order('created_at', { ascending: true }).limit(30);
+        document.getElementById('messages').innerHTML = "";
+        if(data) data.forEach(m => render(m));
+    }
+
+    function updateUserList() {
+        const list = document.getElementById('user-list');
+        list.innerHTML = "";
+        const now = Date.now();
+        Object.keys(onlineUsers).forEach(u => {
+            const div = document.createElement('div');
+            const isTyping = typingStatus[u] && (now - typingStatus[u] < 3000);
+            div.innerHTML = `● ${u}${isTyping ? '<span class="typing-tag">typing...</span>' : ''}`;
+            list.appendChild(div);
+        });
+    }
+
+    document.getElementById('ui').addEventListener('keypress', e => {
+        if(e.key === 'Enter') {
+            const v = e.target.value.trim();
+            if(!v) return;
+            e.target.value = "";
+            handleCmd(v);
+        } else {
+            _supabase.channel('room_data').send({ type: 'broadcast', event: 'typing', payload: { u: user } });
+        }
+    });
+</script>
+</body>
+</html>
