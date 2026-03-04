@@ -220,11 +220,19 @@
         const token = localStorage.getItem('nano_session');
 
         // Вспомогательная функция для вставки (чтобы не дублировать device_log)
-        const post = async (obj) => {
-            const { error } = await _supabase.from('messages').insert([{ ...obj, device_log: token }]);
+       const post = async (obj) => {
+            const { data, error } = await _supabase.functions.invoke('nano-chat-v2', {
+                body: { 
+                    username: user, 
+                    content: obj.content, 
+                    channel: obj.channel || room,
+                    token: token 
+                }
+            });
+
             if(error) {
-                console.error("BLOCK:", error.message);
-                addLocalLog("ERR: Access Denied by DB");
+                console.error("EDGE_ERR:", error);
+                addLocalLog("ERR: Access Denied");
             }
         };
 
@@ -269,9 +277,11 @@
     }
 
    
-    async function systemMsg(txt, isError = false) {
-        const token = localStorage.getItem('nano_session');
-        if (!isError) await _supabase.from('messages').insert([{ username: 'SYSTEM', content: txt, channel: room, device_log: token }]);
+   async function systemMsg(txt, isError = false) {
+        if (!isError) {
+            // Используем уже обновленную функцию post, чтобы пройти через прокладку
+            await post({ username: 'SYSTEM', content: txt, channel: room });
+        }
         render({ username: 'SYSTEM', content: txt, created_at: new Date(), isSystem: !isError, isError: isError });
     }
 
